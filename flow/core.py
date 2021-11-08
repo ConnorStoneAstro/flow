@@ -1,12 +1,33 @@
+"""author: Connor Stone
+
+summary:
+  Main functionality for generating flowchart analysis pipelines.
+
+description:
+  This module contains classes allowing the user to encapsulate code
+  in a framework which fundamentally represents code as a
+  flowchart. This makes for more modular code which can be tested and
+  updated easily. Conceptually every element of the flowchart is a
+  "Node" and these nodes are linked together. There are a number
+  of types of nodes, the most basic being "start" and "end" which
+  are terminators for the flowchart and do nothing themselves. A
+  "process" Node is the workhorse of the flowchart and should
+  enclose most of your analysis code. A "decision" Node branches the
+  flowchart into different sections to handle conditional elments of
+  the analysis. A "chart" Node is a container for a whole flowchart
+  (in this way flowcharts can be nested) and is the primary interface
+  for building flowcharts.
+"""
+
 from time import time
 from inspect import signature
-import pygraphviz as pgv
 from copy import deepcopy
 from pickle import dumps, loads
 from multiprocessing import Pool
+import pygraphviz as pgv
 
 
-class symbol(object):
+class Node:
     """Base object for all nodes in the flowchart
 
     Core functionality for nodes in the flowchart. Includes methods
@@ -47,7 +68,7 @@ class symbol(object):
             self.update_run(func)
 
     def update_run(self, func):
-        """Method to update the function applied by the current symbol. Do
+        """Method to update the function applied by the current Node. Do
         not directly alter the internal _run variable.
 
         Arguments
@@ -55,77 +76,77 @@ class symbol(object):
         func: function
           Function which takes the state as an argument and returns
           the updated state. Can also take the "self" object for the
-          current symbol to allow access to state variables of the
-          symbol.
+          current Node to allow access to state variables of the
+          Node.
 
         """
         self._run = func
 
-    def link_forward(self, S):
-        """Link to the next symbol in the flow chart. Stores a reference to
-        the next symbol object, also calls the "link_reverse" function
-        of the forward symbol so that it knows what has linked to
+    def link_forward(self, node):
+        """Link to the next Node in the flow chart. Stores a reference to
+        the next Node object, also calls the "link_reverse" function
+        of the forward Node so that it knows what has linked to
         it. This is the primary function for building the
         flowchart. Though it should mostly be used internally by the
         chart object, users may wish to make use of it.
 
         Arguments
         -----------------
-        S: symbol
-          A symbol object to be linked as the next step in the
+        node: Node
+          A Node object to be linked as the next step in the
           flowchart.
 
         """
-        self.forward = S
-        S.link_reverse(self)
+        self.forward = node
+        node.link_reverse(self)
 
-    def unlink_forward(self, S):
+    def unlink_forward(self, node):
         """Undo the operations of the "link_forward" method. Returns the
-        symbol to its initial state where it is no longer linked
+        Node to its initial state where it is no longer linked
         forward to any object.
 
         Arguments
         -----------------
-        S: symbol
-          A symbol object to be unlinked from this step in the
+        node: Node
+          A Node object to be unlinked from this step in the
           flowchart.
 
         """
         self.forward = None
-        S.unlink_reverse(self)
+        node.unlink_reverse(self)
 
-    def link_reverse(self, S):
-        """Store a reference to a symbol which has linked to this
-        symbol. This function should only be used internally as it is
+    def link_reverse(self, node):
+        """Store a reference to a Node which has linked to this
+        Node. This function should only be used internally as it is
         expected that the "link_forward" method will call this
         method. Anyone constructing their own flowchart step type
-        which inherits from symbol should keep this behaviour in mind.
+        which inherits from Node should keep this behaviour in mind.
 
         Arguments
         -----------------
-        S: symbol
-          A symbol object which was linked to this step in the
+        node: Node
+          A Node object which was linked to this step in the
           flowchart.
 
         """
-        self.reverse.update([S])
+        self.reverse.update([node])
 
-    def unlink_reverse(self, S):
+    def unlink_reverse(self, node):
         """Undo the operations of the "link_reverse" method. Returns the
-        symbol to its initial state where it is no longer linked to
+        Node to its initial state where it is no longer linked to
         any object.
 
         Arguments
         -----------------
-        S: symbol
-          A symbol object to be unlinked from this step in the
+        node: Node
+          A Node object to be unlinked from this step in the
           flowchart.
 
         """
-        self.reverse.remove(S)
+        self.reverse.remove(node)
 
     def _run(self, state):
-        """Placeholder function for the behaviour of a symbol. Simply
+        """Placeholder function for the behaviour of a Node. Simply
         passes the state on unaltered.
 
         Arguments
@@ -159,11 +180,11 @@ class symbol(object):
         return self.name
 
 
-class start(symbol):
+class Start(Node):
     """Initialization point of a flowchart.
 
-    This symbol is the starting point of a flowchart. It has no
-    functionality except to pass the state along to the next symbol in
+    This Node is the starting point of a flowchart. It has no
+    functionality except to pass the state along to the next Node in
     the flowchart. Note that this class has no ability to link
     backwards as it is by requirement the first node. It's
     initialization takes no arguments.
@@ -175,14 +196,14 @@ class start(symbol):
         self.shape = "box"
         self.style = "rounded"
 
-    def link_reverse(self, S):
+    def link_reverse(self, node):
         """Override the default "link_reverse" method behavior. It now raises
         an error as nothing should link to start.
 
         """
         raise AttributeError("'start' object has no method 'link_reverse'")
 
-    def unlink_reverse(self, S):
+    def unlink_reverse(self, node):
         """Override the default "unlink_reverse" method behaviour. It now
         raises an error as nothing should link to start.
 
@@ -190,10 +211,10 @@ class start(symbol):
         raise AttributeError("'start' object has no method 'unlink_reverse'")
 
 
-class end(symbol):
+class End(Node):
     """Stopping point of a flowchart.
 
-    This symbol represents an endpoint of a flowchart. Whenever a
+    This Node represents an endpoint of a flowchart. Whenever a
     process reaches this note it will end computation and return the
     state in it's current form. Note that this class has no ability to
     link forward as it is by requirement the last node in the
@@ -206,14 +227,14 @@ class end(symbol):
         self.shape = "box"
         self.style = "rounded"
 
-    def link_forward(self, S):
+    def link_forward(self, node):
         """Override the default "link_forward" method behavior. It now raises
         an error as end should not link to anything.
 
         """
         raise AttributeError("'end' object has no method 'link_forward'")
 
-    def unlink_forward(self, S):
+    def unlink_forward(self, node):
         """Override the default "unlink_forward" method behavior. It now
         raises an error as end should not link to anything.
 
@@ -224,10 +245,10 @@ class end(symbol):
         raise StopIteration()
 
 
-class process(symbol):
+class Process(Node):
     """Basic node for acting on the state.
 
-    This node retains all default functionality of a symbol. This is
+    This node retains all default functionality of a Node. This is
     the workhorse of a flowchart that operates on a given state and
     returns the updated version. The visual appearance of this node is
     a box.
@@ -253,7 +274,7 @@ class process(symbol):
         self.shape = "box"
 
 
-class decision(symbol):
+class Decision(Node):
     """Node for switching flowchart path based on the state.
 
     Instead of acting on a state, this node's purpose is to determine
@@ -285,25 +306,25 @@ class decision(symbol):
         self.shape = "diamond"
         self.options = {}
 
-    def link_forward(self, S):
+    def link_forward(self, node):
         """Update the behaviour of the "link_forward" method. A decision
         object can be linked to many forward steps. The new behaviour
         stores these possibilities in an "options" dictionary. The
-        first symbol which is linked will be set as the forward object
+        first Node which is linked will be set as the forward object
         until a decision is made at runtime.
 
         Arguments
         -----------------
-        S: symbol
-          A symbol object to be linked as a possible next step in the
+        node: Node
+          A Node object to be linked as a possible next step in the
           flowchart.
         """
         if self.forward is None:
-            self.forward = S
-        self.options[S.name] = S
-        S.link_reverse(self)
+            self.forward = node
+        self.options[node.name] = node
+        node.link_reverse(self)
 
-    def unlink_forward(self, S):
+    def unlink_forward(self, node):
         """Update the behaviour of the "unlink_forward" method. A decision
         object can be linked to many forward steps. The new behaviour
         removes the given state from the options dictionary. If
@@ -312,16 +333,16 @@ class decision(symbol):
 
         Arguments
         -----------------
-        S: symbol
-          A symbol object to be unlinked as a next step in the
+        node: Node
+          A Node object to be unlinked as a next step in the
           flowchart.
         """
-        del self.options[S.name]
+        del self.options[node.name]
         if len(self.options) > 0:
             self.forward = self.options[self.options.keys()[0]]
         else:
             self.forward = None
-        S.unlink_reverse(self)
+        node.unlink_reverse(self)
 
     def __call__(self, state):
         self.status = "running"
@@ -343,7 +364,7 @@ class decision(symbol):
         return state
 
 
-class chart(symbol):
+class Chart(Node):
     """Main container for a flowchart.
 
     Stores all the nodes and links between them composing a
@@ -352,7 +373,7 @@ class chart(symbol):
     start to end. This is the main object that users should interact
     with when constructing a flowchart. Includes methods to add/link
     nodes, draw the flowchart, save/load the flowchart, and visualize
-    it. This class inherits from the symbol object and so can itself
+    it. This class inherits from the Node object and so can itself
     be a node in another larger flowchart. In this case it will be
     represented visually as a hexagon.
 
@@ -379,12 +400,12 @@ class chart(symbol):
             return
 
         super().__init__(name)
-        self.symbols = {}
+        self.nodes = {}
         self.structure_dict = {}
         self._linear_mode = False
         self._linear_mode_link = "start"
-        self.add_node(start())
-        self.add_node(end())
+        self.add_node(Start())
+        self.add_node(End())
         self.path = []
         self.benchmark = []
         self.istidy = False
@@ -405,11 +426,9 @@ class chart(symbol):
         """
         if mode and not self._linear_mode:
             self._linear_mode = True
-            while not self.symbols[self._linear_mode_link].forward is None:
+            while not self.nodes[self._linear_mode_link].forward is None:
                 prev = self._linear_mode_link
-                self._linear_mode_link = self.symbols[
-                    self._linear_mode_link
-                ].forward.name
+                self._linear_mode_link = self.nodes[self._linear_mode_link].forward.name
             if self._linear_mode_link == "end":
                 self._linear_mode_link = prev
             else:
@@ -417,24 +436,24 @@ class chart(symbol):
         elif not mode and self._linear_mode:
             self._linear_mode = False
 
-    def add_node(self, S):
-        """Add a new symbol to the flowchart. This merely makes the flowchart
-        aware of the symbol, it will need to be linked in order to
+    def add_node(self, node):
+        """Add a new Node to the flowchart. This merely makes the flowchart
+        aware of the Node, it will need to be linked in order to
         take part in the calculation (unless linear mode is on).
 
         Arguments
         -----------------
-        S: symbol
-          A symbol object to be added to the flowchart.
+        node: Node
+          A Node object to be added to the flowchart.
         """
-        self.symbols[S.name] = S
-        self.structure_dict[S.name] = []
+        self.nodes[node.name] = node
+        self.structure_dict[node.name] = []
         self.istidy = False
         if self._linear_mode:
             self.unlink_nodes(self._linear_mode_link, "end")
-            self.link_nodes(self._linear_mode_link, S.name)
-            self.link_nodes(S.name, "end")
-            self._linear_mode_link = S.name
+            self.link_nodes(self._linear_mode_link, node.name)
+            self.link_nodes(node.name, "end")
+            self._linear_mode_link = node.name
 
     def add_process_node(self, name, func=None):
         """Utility wrapper to first create a process object then add it to
@@ -455,7 +474,7 @@ class chart(symbol):
         :default:
           None
         """
-        newprocess = process(name, func)
+        newprocess = Process(name, func)
         self.add_node(newprocess)
 
     def add_decision_node(self, name, func=None):
@@ -477,45 +496,45 @@ class chart(symbol):
         :default:
           None
         """
-        newdecision = decision(name, func)
+        newdecision = Decision(name, func)
         self.add_node(newdecision)
 
-    def link_nodes(self, S1, S2):
-        """Link two nodes in the flowchart. S1 will be linked forward to S2.
+    def link_nodes(self, node1, node2):
+        """Link two nodes in the flowchart. node1 will be linked forward to node2.
 
         Arguments
         -----------------
-        S1: symbol
-          A symbol object in the flowchart which will be linked
-          forward to S2.
+        node1: Node
+          A Node object in the flowchart which will be linked
+          forward to node2.
 
-        S2: symbol
-          A symbol object in the flowchart which will have S1 linked to it.
+        node2: Node
+          A Node object in the flowchart which will have node1 linked to it.
         """
-        self.symbols[S1].link_forward(self.symbols[S2])
-        self.structure_dict[S1].append(S2)
+        self.nodes[node1].link_forward(self.nodes[node2])
+        self.structure_dict[node1].append(node2)
         self.istidy = False
 
-    def unlink_nodes(self, S1, S2):
+    def unlink_nodes(self, node1, node2):
         """Undo the operations of "link_nodes" and return to previous state.
 
         Arguments
         -----------------
-        S1: symbol
-          A symbol object in the flowchart which was linked forward to S2.
+        node1: Node
+          A Node object in the flowchart which was linked forward to node2.
 
-        S2: symbol
-          A symbol object in the flowchart which did have S1 linked to it.
+        node2: Node
+          A Node object in the flowchart which did have node1 linked to it.
         """
-        self.symbols[S1].unlink_forward(self.symbols[S2])
-        self.structure_dict[S1].pop(self.structure_dict[S1].index(S2))
+        self.nodes[node1].unlink_forward(self.nodes[node2])
+        self.structure_dict[node1].pop(self.structure_dict[node1].index(node2))
         self.istidy = False
 
-    def build_chart(self, symbols=[], structure={}):
+    def build_chart(self, nodes=[], structure={}):
         """Compact way to build a chart.
 
         Through this function a user may supply all necessary
-        information to construct a flowchart. A list of symbols can be
+        information to construct a flowchart. A list of nodes can be
         added to the chart instead of adding them one at a time. Also
         a structure dictionary can be provided which gives all of the
         linkages between nodes. Essentially this function just
@@ -525,8 +544,8 @@ class chart(symbol):
 
         Arguments
         -----------------
-        symbols: list
-          A list of symbol objects to add to the flowchart. These will
+        nodes: list
+          A list of Node objects to add to the flowchart. These will
           be added one at a time in the order provided, thus if
           "linear mode" is on then each one will be appended to the
           end of the flowchart.
@@ -537,23 +556,23 @@ class chart(symbol):
           values can be either name strings or lists of name
           strings. The key will be linked forward to the value(s).
         """
-        for S in symbols:
-            self.add_node(S)
+        for node in nodes:
+            self.add_node(node)
 
-        if type(structure) == list:
-            for S1, S2 in zip(structure[:-1], structure[1:]):
-                self.link_nodes(S1, S2)
+        if isinstance(structure, list):
+            for node1, node2 in zip(structure[:-1], structure[1:]):
+                self.link_nodes(node1, node2)
             if not structure[0] == "start":
                 self.link_nodes("start", structure[0])
             if not structure[-1] == "end":
                 self.link_nodes(structure[-1], "end")
         else:
-            for S1 in structure.keys():
-                if type(structure[S1]) == str:
-                    self.link_nodes(S1, structure[S1])
+            for node1 in structure.keys():
+                if isinstance(structure[node1], str):
+                    self.link_nodes(node1, structure[node1])
                 else:
-                    for S2 in structure[S1]:
-                        self.link_nodes(S1, S2)
+                    for node2 in structure[node1]:
+                        self.link_nodes(node1, node2)
 
     def draw(self, filename):
         """Visual representation of the flowchart.
@@ -586,8 +605,8 @@ class chart(symbol):
         filename: string
           path to save current flowchart to.
         """
-        with open(filename, "wb") as f:
-            f.write(dumps(self.__dict__))
+        with open(filename, "wb") as flowchart_file:
+            flowchart_file.write(dumps(self.__dict__))
 
     def load(self, filename):
         """Loads the flowchart representation.
@@ -604,32 +623,32 @@ class chart(symbol):
         filename: string
           path to load flowchart from.
         """
-        with open(filename, "rb") as f:
-            res = loads(f.read())
+        with open(filename, "rb") as flowchart_file:
+            res = loads(flowchart_file.read())
         return res
 
     def _tidy_ends(self):
-        for S in self.symbols.keys():
-            if S == "end":
+        for name, node in self.nodes.items():
+            if name == "end":
                 continue
-            if self.symbols[S].forward is None:
-                RuntimeWarning("%s is undirected, linking to 'end' node" % S)
-                self.link_nodes(S, "end")
+            if node.forward is None:
+                RuntimeWarning("%s is undirected, linking to 'end' node" % name)
+                self.link_nodes(name, "end")
         self.istidy = True
 
     def _run(self, state):
         current = "start"
         assert (
-            not self.symbols["start"].forward is None
+            not self.nodes["start"].forward is None
         ), "chart has no structure! start must be linked to a node"
         if not self.istidy:
             self._tidy_ends()
         while True:
-            state.update(self.symbols[current](state))
-            self.benchmark.append(self.symbols[current].benchmark)
+            state.update(self.nodes[current](state))
+            self.benchmark.append(self.nodes[current].benchmark)
             self.path.append(current)
             try:
-                current = self.symbols[current]["next"].name
+                current = self.nodes[current]["next"].name
             except StopIteration:
                 break
         return state
@@ -638,11 +657,13 @@ class chart(symbol):
         if not self.istidy:
             self._tidy_ends()
         visual = pgv.AGraph(strict=True, directed=True)
-        for S in self.symbols.values():
-            visual.add_node(S.name, color=S.colour, shape=S.shape, style=S.style)
-        for S1 in self.structure_dict.keys():
-            for S2 in self.structure_dict[S1]:
-                visual.add_edge(S1, S2)
+        for node in self.nodes.values():
+            visual.add_node(
+                node.name, color=node.colour, shape=node.shape, style=node.style
+            )
+        for node1, links in self.structure_dict.items():
+            for node2 in links:
+                visual.add_edge(node1, node2)
         return visual
 
     def __str__(self):
@@ -650,7 +671,7 @@ class chart(symbol):
         return visual.string()
 
 
-class pipe(object):
+class Pipe:
     """Basic object for running flowcharts on states.
 
     A pipe is initialized with a chart object and can then be called
@@ -673,23 +694,21 @@ class pipe(object):
         self.flowchart = flowchart
 
     def _run(self, state):
-        C = deepcopy(self.flowchart)
-        return C(state)
+        chart = deepcopy(self.flowchart)
+        return chart(state)
 
     def __call__(self, state):
 
-        if type(state) == list:
+        if isinstance(state, list):
             with Pool(4) as pool:
                 return pool.map(self._run, state)
         else:
             return self._run(state)
 
 
-class state(object):
+class State:
     """Dummy object to store state information
 
     This can be used as a state object to pass information through a
     flowchart.
     """
-
-    pass
