@@ -19,7 +19,9 @@ from multiprocessing import Pool
 from copy import deepcopy
 from .core import Node
 from .first_order_nodes import Start, End, Process, Decision
+from datetime import datetime
 import traceback
+import logging
 
 
 class Chart(Node):
@@ -50,7 +52,11 @@ class Chart(Node):
         None
     """
 
-    def __init__(self, name=None, filename=None):
+    def __init__(self, name=None, filename=None, logname=None):
+        if not logname is None:
+            logging.basicConfig(
+                filename=logname, encoding="utf-8", filemode="w", level=logging.INFO
+            )
         if not filename is None:
             res = self.load(filename)
             super().__init__(res["name"])
@@ -319,7 +325,7 @@ class Chart(Node):
         if not self.istidy:
             self._tidy_ends()
         for node in self:
-            print(f"{self.name}: {node.name}")
+            logging.info(f"{self.name}: {node.name} ({datetime.now()})")
             state = node(state)
             self.benchmarks.append(node.benchmark)
             self.path.append(node.name)
@@ -415,7 +421,7 @@ class Pipe(Node):
         self.safe_mode = safe_mode
         self.process_mode = process_mode
         self.cores = cores
-        self.shape = 'parallelogram'
+        self.shape = "parallelogram"
 
     def update_flowchart(self, flowchart):
 
@@ -430,8 +436,8 @@ class Pipe(Node):
             try:
                 state = chart(state)
             except Exception as e:
-                print(f"on step '{chart.current_node}' got error: {str(e)}")
-                print('with full trace: %s' % traceback.format_exc())
+                logging.error(f"on step '{chart.current_node}' got error: {str(e)}")
+                logging.error("with full trace: %s" % traceback.format_exc())
                 state = None
         else:
             state = chart(state)
