@@ -19,6 +19,7 @@ from multiprocessing import Pool
 from copy import deepcopy
 from .core import Node
 from .first_order_nodes import Start, End, Process, Decision
+import traceback
 
 
 class Chart(Node):
@@ -318,7 +319,8 @@ class Chart(Node):
         if not self.istidy:
             self._tidy_ends()
         for node in self:
-            state.update(node(state))
+            print(f"{self.name}: {node.name}")
+            state = node(state)
             self.benchmarks.append(node.benchmark)
             self.path.append(node.name)
         return state
@@ -413,6 +415,7 @@ class Pipe(Node):
         self.safe_mode = safe_mode
         self.process_mode = process_mode
         self.cores = cores
+        self.shape = 'parallelogram'
 
     def update_flowchart(self, flowchart):
 
@@ -426,11 +429,19 @@ class Pipe(Node):
         if self.safe_mode:
             try:
                 state = chart(state)
-                return state, chart.benchmarks, chart.path
-            except:
-                return None, chart.benchmarks, chart.path
-        state = chart(state)
-        return state, chart.benchmarks, chart.path
+            except Exception as e:
+                print(f"on step '{chart.current_node}' got error: {str(e)}")
+                print('with full trace: %s' % traceback.format_exc())
+                state = None
+        else:
+            state = chart(state)
+        if isinstance(chart, Chart):
+            timing = chart.benchmarks
+            path = chart.path
+        else:
+            timing = [chart.benchmark]
+            path = [chart.name]
+        return state, timing, path
 
     def _run(self, state):
         if self.process_mode == "parallelize":
@@ -442,10 +453,12 @@ class Pipe(Node):
                 return list(r[0] for r in result)
         elif self.process_mode == "iterate":
             result = map(self.apply_chart, state)
+            ret = []
             for r in result:
                 self.benchmarks.append(r[1])
                 self.paths.append(r[2])
-            return list(r[0] for r in result)
+                ret.append(r[0])
+            return ret
         elif self.process_mode == "pass":
             result = self.apply_chart(state)
             self.benchmarks.append(result[1])

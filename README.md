@@ -12,7 +12,7 @@ copy the 'flow' directory somewhere recognized by your python-path
 import flow
 
 # make a chart
-mychart = flow.chart('mychart')
+mychart = flow.Chart('mychart')
 
 # add nodes to the chart
 mychart.add_process_node('myprocess1')
