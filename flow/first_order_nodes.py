@@ -31,25 +31,12 @@ class Start(Node):
     """
 
     def __init__(self):
-        super().__init__("start")
-        self.colour = "blue"
-        self.shape = "box"
-        self.style = "rounded"
-
-    def link_reverse(self, node):
-        """Override the default "link_reverse" method behavior. It now raises
-        an error as nothing should link to start.
-
-        """
-        raise AttributeError("'start' object has no method 'link_reverse'")
-
-    def unlink_reverse(self, node):
-        """Override the default "unlink_reverse" method behaviour. It now
-        raises an error as nothing should link to start.
-
-        """
-        raise AttributeError("'start' object has no method 'unlink_reverse'")
-
+        super().__init__()
+        self.visual_kwargs['color'] = "blue"
+        self.visual_kwargs['shape'] = 'box'
+        self.visual_kwargs['style'] = 'rounded'
+        self.visual_kwargs['root'] = True
+        self.visual_kwargs['pin'] = True
 
 class End(Node):
     """Stopping point of a flowchart.
@@ -62,10 +49,10 @@ class End(Node):
     """
 
     def __init__(self):
-        super().__init__("end")
-        self.colour = "red"
-        self.shape = "box"
-        self.style = "rounded"
+        super().__init__()
+        self.visual_kwargs['color'] = "red"
+        self.visual_kwargs['shape'] = 'box'
+        self.visual_kwargs['style'] = 'rounded'
 
     def link_forward(self, node):
         """Override the default "link_forward" method behavior. It now raises
@@ -109,9 +96,9 @@ class Process(Node):
         None
     """
 
-    def __init__(self, name, func=None):
-        super().__init__(name, func)
-        self.shape = "box"
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.visual_kwargs['shape'] = "box"
 
 
 class Decision(Node):
@@ -141,64 +128,22 @@ class Decision(Node):
         None
     """
 
-    def __init__(self, name, func=None):
-        super().__init__(name, func)
-        self.shape = "diamond"
-        self.options = {}
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.visual_kwargs['shape'] = "diamond"
 
-    def link_forward(self, node):
-        """Update the behaviour of the "link_forward" method. A decision
-        object can be linked to many forward steps. The new behaviour
-        stores these possibilities in an "options" dictionary. The
-        first Node which is linked will be set as the forward object
-        until a decision is made at runtime.
-
-        Arguments
-        -----------------
-        node: Node
-          A Node object to be linked as a possible next step in the
-          flowchart.
-        """
-        if self.forward is None:
-            self.forward = node
-        self.options[node.name] = node
-        node.link_reverse(self)
-
-    def unlink_forward(self, node):
-        """Update the behaviour of the "unlink_forward" method. A decision
-        object can be linked to many forward steps. The new behaviour
-        removes the given state from the options dictionary. If
-        necessary, a new object will be set as the forward object
-        until a decision is made at runtime.
-
-        Arguments
-        -----------------
-        node: Node
-          A Node object to be unlinked as a next step in the
-          flowchart.
-        """
-        del self.options[node.name]
-        if len(self.options) > 0:
-            self.forward = self.options[self.options.keys()[0]]
-        else:
-            self.forward = None
-        node.unlink_reverse(self)
-
-    def __call__(self, state):
-        self.status = "running"
+    def __call__(self, *state):
         start = time()
-        sig = signature(self._run)
-        if "self" in sig.parameters:
-            res = self._run(self, state)
-        else:
-            res = self._run(state)
-
-        assert res in self.options, (
-            "node must be linked before it can be selected."
-            f" Chosen {res} not in options: {str(self.options.keys())}"
-        )
-
-        self.forward = self.options[res]
+        res = self._run(*state)
+        if isinstance(res,int) and res != 0:
+            self.forward[0], self.forward[res] = self.forward[res], self.forward[0]
+        elif isinstance(res, str) and res != self.forward[0].name:
+            names = list(self.forward[i].name for i in range(len(self.forward)))
+            index = names.index(res)
+            self.forward[0], self.forward[index] = self.forward[index], self.forward[0]
+        elif isinstance(res, Node) and res is not self.forward[0]:
+            names = list(self.forward[i].name for i in range(len(self.forward)))
+            index = names.index(res.name)
+            self.forward[0], self.forward[index] = self.forward[index], self.forward[0]            
         self.benchmark = time() - start
-        self.status = "complete"
         return state

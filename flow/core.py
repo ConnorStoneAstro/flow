@@ -14,6 +14,18 @@ description:
 from time import time
 from inspect import signature
 
+class CallExitChart(Exception):
+    """
+    Raises a call to end the current chart object's itteration and
+    proceed immediately to whatever is next.
+    """
+    pass
+
+class CallExitFlow(Exception):
+    """
+    Raises a call to end the flowchart immediately. 
+    """
+    pass
 
 class Node:
     """Base object for all nodes in the flowchart
@@ -33,43 +45,49 @@ class Node:
       name of the node, should be unique in the flowchart. This is how
       other nodes (i.e. decision nodes) will identify the node.
 
-    func: function
-      function object of the form: func(state) returns state. This can
-      be given on initialization to set the behavior of the node in
-      the flowchart. This function should operate on the state and
-      return the new updated state object.
-
-      :default:
-        None
     """
 
-    def __init__(self, name, func=None):
-        self.name = name
-        self.forward = None
+    node_state = {}
+    
+    def __init__(self, **kwargs):
+        if "name" in kwargs: self.name = kwargs["name"]
+        else: self.name = self.__class__.__name__
+        
+        self.owner = None
+        self.forward = []
         self.reverse = set()
-        self.status = "initialized"
         self.benchmark = -1
-        self.colour = "black"
-        self.shape = "plain"
-        self.style = "solid"
+        self.visual_kwargs = {'color': "black",
+                              'shape': 'plain',
+                              'style': 'solid'}
         if not func is None:
             self.update_run(func)
 
-    def update_run(self, func):
-        """Method to update the function applied by the current Node. Do
-        not directly alter the internal _run variable.
+    def action(self, *state):
+        """Placeholder function which defines the primary behaviour of the
+        node.
 
         Arguments
         -----------------
-        func: function
-          Function which takes the state as an argument and returns
-          the updated state. Can also take the "self" object for the
-          current Node to allow access to state variables of the
-          Node.
+        state: object
+          container for all information related to a flowchart
+          analysis task.
 
         """
-        self._run = func
+        return state
 
+    def set_owner(self, node):
+        """Pointer to the object which contains this node.
+
+        Arguments
+        -----------------
+        node: Node
+          A Node object which can hold nodes, for example a Chart
+          object.
+
+        """
+        self.owner = node
+    
     def link_forward(self, node):
         """Link to the next Node in the flow chart. Stores a reference to
         the next Node object, also calls the "link_reverse" function
@@ -85,7 +103,7 @@ class Node:
           flowchart.
 
         """
-        self.forward = node
+        self.forward.append(node)
         node.link_reverse(self)
 
     def unlink_forward(self, node):
@@ -100,7 +118,7 @@ class Node:
           flowchart.
 
         """
-        self.forward = None
+        self.forward.pop(self.forward.index(node))
         node.unlink_reverse(self)
 
     def link_reverse(self, node):
@@ -133,9 +151,13 @@ class Node:
         """
         self.reverse.remove(node)
 
-    def _run(self, state):
-        """Placeholder function for the behaviour of a Node. Simply
-        passes the state on unaltered.
+    def exit_chart(self, msg = ""):
+        raise CallExitChart(msg)
+    def exit_flow(self, msg = ""):
+        raise CallExitFlow(msg)
+
+    def _run(self, *state):
+        """Wrapper function for node specific action function.
 
         Arguments
         -----------------
@@ -144,23 +166,17 @@ class Node:
           analysis task.
 
         """
-        return state
+        return self.action(state)
 
-    def __call__(self, state):
-        self.status = "running"
+    def __call__(self, *state):
         start = time()
-        sig = signature(self._run)
-        if "self" in sig.parameters:
-            res = self._run(self, state)
-        else:
-            res = self._run(state)
+        res = self._run(*state)
         self.benchmark = time() - start
-        self.status = "complete"
         return res
 
     def __getitem__(self, key):
-        if key == "next" and not self.forward is None:
-            return self.forward
+        if key in range(len(self.forward)):
+            return self.forward[key]
         else:
             raise StopIteration()
 

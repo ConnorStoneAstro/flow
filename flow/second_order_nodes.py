@@ -17,12 +17,12 @@ import pygraphviz as pgv
 from pickle import dumps, loads
 from multiprocessing import Pool
 from copy import deepcopy
-from .core import Node
+from .core import Node, CallExitChart, CallExitFlow
 from .first_order_nodes import Start, End, Process, Decision
 from datetime import datetime
+from time import time
 import traceback
 import logging
-
 
 class Chart(Node):
     """Main container for a flowchart.
@@ -52,19 +52,15 @@ class Chart(Node):
         None
     """
 
-    def __init__(self, name=None, filename=None, logname=None):
-        if not logname is None:
+    def __init__(self, logfile=None, safe_mode=False, **kwargs):
+        super().__init__(name, **kwargs)
+        if isinstance(logfile, str):
             logging.basicConfig(
-                filename=logname, encoding="utf-8", filemode="w", level=logging.INFO
+                filename=logfile, filemode="w", level=logging.INFO
             )
-        if not filename is None:
-            res = self.load(filename)
-            super().__init__(res["name"])
-            self.__dict__.update(res)
-            return
-
-        super().__init__(name)
         self.nodes = {}
+        self.state = None
+        self.safe_mode = safe_mode
         self.structure_dict = {}
         self._linear_mode = False
         self._linear_mode_link = "start"
@@ -74,7 +70,37 @@ class Chart(Node):
         self.path = []
         self.benchmarks = []
         self.istidy = False
-        self.shape = "hexagon"
+        self.visual_kwargs['shape'] = "hexagon"
+
+    def action(self, state):
+
+        self.state = state
+        for node in self:
+            logging.info(f"{self.name}: {node.name} ({datetime.now()})")
+            self.path.append(node.name)
+            start = time()
+            try:
+                self.state = node(self.state)
+            except CallExitChart as e:
+                logging.info(f"{self.name}: {node.name} Ended Chart ({datetime.now()})")
+                break
+            except CallExitFlow as e:
+                if hasattr(node, "state"):
+                    self.state = node.state
+                if self.owner is None:
+                    logging.info(f"{self.name}: {node.name} Ended Flow ({datetime.now()})")
+                    break
+                else:
+                    raise e
+            except Exception as e:
+                if not self.safe_mode:
+                    logging.error(f"on step '{self.current_node}' got error: {str(e)}")
+                    logging.error("with full trace: %s" % traceback.format_exc())
+                    raise e
+            finally:
+                self.benchmarks.append(time() - start)
+                    
+        return self.state
 
     def linear_mode(self, mode):
         """Activate a mode where new nodes are automatically added to the end
@@ -270,7 +296,7 @@ class Chart(Node):
           path to save final graphical representation. Should end in
           .png, .jpg, etc.
         """
-        visual = self._construct_chart_visual()
+        visual, nodes = self._construct_chart_visual()
         visual.layout()
         visual.draw(filename)
 
@@ -318,31 +344,26 @@ class Chart(Node):
                 self.link_nodes(name, "end")
         self.istidy = True
 
-    def _run(self, state):
-        assert (
-            not self.nodes["start"].forward is None
-        ), "chart has no structure! start must be linked to a node"
+    def _construct_chart_visual(self, visual = None):
         if not self.istidy:
             self._tidy_ends()
-        for node in self:
-            logging.info(f"{self.name}: {node.name} ({datetime.now()})")
-            state = node(state)
-            self.benchmarks.append(node.benchmark)
-            self.path.append(node.name)
-        return state
 
-    def _construct_chart_visual(self):
-        if not self.istidy:
-            self._tidy_ends()
-        visual = pgv.AGraph(strict=True, directed=True, splines="line")
+        if not visual:
+            visual = pgv.AGraph(strict=True, directed=True, splines="line", overlap=False)
+        nodes = []
         for node in self.nodes.values():
-            visual.add_node(
-                node.name, color=node.colour, shape=node.shape, style=node.style
-            )
+            if isinstance(node, Chart):
+                visual, subgraph = node._construct_chart_visual(visual)
+                visual.subgraph(subgraph, name = node.name, label = node.name, style = 'dotted')
+            else:
+                visual.add_node(
+                    node.name, **node.visual_kwargs
+                )
+                nodes.append(node.name)
         for node1, links in self.structure_dict.items():
             for node2 in links:
                 visual.add_edge(node1, node2)
-        return visual
+        return visual, nodes
 
     def __str__(self):
         visual = self._construct_chart_visual()
@@ -353,7 +374,13 @@ class Chart(Node):
         return self
 
     def __next__(self):
-        self.current_node = self.nodes[self.current_node]["next"].name
+        try:
+            self.current_node = self.nodes[self.current_node]["next"].name
+        except AttributeError:
+            next_node = self.nodes[self.current_node]["next"]
+            assert self.current_node in self.nodes
+            self.link_nodes(self.current_node, next_node)
+            self.current_node = next_node
         if self.current_node == "end":
             raise StopIteration
         return self.nodes[self.current_node]
@@ -413,7 +440,7 @@ class Pipe(Node):
     """
 
     def __init__(
-        self, name, flowchart, safe_mode=True, process_mode="parallelize", cores=4
+            self, name, flowchart, safe_mode=True, process_mode="parallelize", cores=4, **kwargs
     ):
 
         super().__init__(name)
@@ -421,7 +448,7 @@ class Pipe(Node):
         self.safe_mode = safe_mode
         self.process_mode = process_mode
         self.cores = cores
-        self.shape = "parallelogram"
+        self.visual_kwargs['shape'] = "parallelogram"
 
     def update_flowchart(self, flowchart):
 
@@ -429,33 +456,37 @@ class Pipe(Node):
         self.benchmarks = []
         self.paths = []
 
-    def apply_chart(self, state):
+    def apply_chart(self, *state):
 
         chart = deepcopy(self.flowchart)
+        logging.info(f"PIPE:{self.name}({self.process_mode}): {chart.name} ({datetime.now()})")
         if self.safe_mode:
             try:
-                state = chart(state)
+                res = chart(*state)
             except Exception as e:
                 logging.error(f"on step '{chart.current_node}' got error: {str(e)}")
                 logging.error("with full trace: %s" % traceback.format_exc())
-                state = None
+                res = None
         else:
-            state = chart(state)
+            res = chart(*state)
+            
         if isinstance(chart, Chart):
             timing = chart.benchmarks
             path = chart.path
         else:
             timing = [chart.benchmark]
             path = [chart.name]
-        return state, timing, path
+        return res, timing, path
 
     def _run(self, state):
         if self.process_mode == "parallelize":
+            starttime = time()
             with Pool(self.cores) as pool:
                 result = pool.map(self.apply_chart, state)
                 for r in result:
                     self.benchmarks.append(r[1])
                     self.paths.append(r[2])
+                logging.info(f"PIPE:Finished parallelize run in {time() - starttime} sec")
                 return list(r[0] for r in result)
         elif self.process_mode == "iterate":
             result = map(self.apply_chart, state)
