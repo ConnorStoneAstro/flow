@@ -14,11 +14,11 @@ description:
 """
 
 import pygraphviz as pgv
-from pickle import dumps, loads
 from multiprocessing import Pool
 from copy import deepcopy
-from .core import Node, CallExitChart, CallExitFlow
-from .first_order_nodes import Start, End, Process, Decision
+from .core import Node
+from .first_order_nodes import Start, End
+from .flow_exceptions import FlowExitChart, FlowExit
 from datetime import datetime
 from time import time
 import traceback
@@ -39,21 +39,27 @@ class Chart(Node):
 
     Arguments
     -----------------
-    name: string
-      name of the node, should be unique in the flowchart. This is how
-      other nodes (i.e. decision nodes) will identify the node.
+    structure: dict or list
+      A dictonary that gives the structure of the flowchart. The keys
+      in the dictionary are the name strings of nodes, the values can
+      be either name strings or lists of name strings. The key will be
+      linked forward to the value(s).
 
-    filename: string
-      path to a file containing a saved flowchart. This will be loaded
-      and used to initialize the current flowchart. Note that the user
-      can still set the name of the flowchart to whatever they like.
+    node_kwargs: dict
+      A dictionary of arguments to provide to nodes on creation.  For
+      custom named nodes (e.g. sub-charts) will also provide the class
+      name for the node.
+    
+    logfile: string
+      The name of a log file to track the path through the flowchart.
 
-      :default:
-        None
+    safe_mode: bool
+      If safe_mode = True then errors will be caught and the Chart will
+      simply proceed to the next node.
     """
 
-    def __init__(self, logfile=None, safe_mode=False, **kwargs):
-        super().__init__(name, **kwargs)
+    def __init__(self, structure, node_kwargs = {}, logfile=None, safe_mode=False, **kwargs):
+        super().__init__(**kwargs)
         if isinstance(logfile, str):
             logging.basicConfig(
                 filename=logfile, filemode="w", level=logging.INFO
@@ -62,30 +68,33 @@ class Chart(Node):
         self.state = None
         self.safe_mode = safe_mode
         self.structure_dict = {}
-        self._linear_mode = False
-        self._linear_mode_link = "start"
-        self.current_node = "start"
-        self.add_node(Start())
-        self.add_node(End())
+        self.current_node = "Start"
+        self.build_chart(structure, node_kwargs)
         self.path = []
         self.benchmarks = []
-        self.istidy = False
         self.visual_kwargs['shape'] = "hexagon"
 
     def action(self, state):
 
         self.state = state
+        self.path = []
+        self.benchmarks = []
+        
         for node in self:
             logging.info(f"{self.name}: {node.name} ({datetime.now()})")
             self.path.append(node.name)
             start = time()
             try:
                 self.state = node(self.state)
-            except CallExitChart as e:
+            except FlowExitChart as e:
+                if not "End" in self.structure_dict[node.name]:
+                    self.link_nodes(node.name, "End")
                 logging.info(f"{self.name}: {node.name} Ended Chart ({datetime.now()})")
                 break
-            except CallExitFlow as e:
-                if hasattr(node, "state"):
+            except FlowExit as e:
+                if not "End" in self.structure_dict[node.name]:
+                    self.link_nodes(node.name, "End")
+                if hasattr(node, "state") and node.state is not None:
                     self.state = node.state
                 if self.owner is None:
                     logging.info(f"{self.name}: {node.name} Ended Flow ({datetime.now()})")
@@ -102,93 +111,22 @@ class Chart(Node):
                     
         return self.state
 
-    def linear_mode(self, mode):
-        """Activate a mode where new nodes are automatically added to the end
-        of the flowchart. This way a simple chart without a complex
-        decision structure can be constructed with minimal redundant
-        linking.
-
-        Arguments
-        -----------------
-        mode: bool
-          If True, linear mode will be turned on. If False, it will be
-          turned off
-
-        """
-        if mode and not self._linear_mode:
-            self._linear_mode = True
-            while not self.nodes[self._linear_mode_link].forward is None:
-                prev = self._linear_mode_link
-                self._linear_mode_link = self.nodes[self._linear_mode_link].forward.name
-            if self._linear_mode_link == "end":
-                self._linear_mode_link = prev
-            else:
-                self.link_nodes(self._linear_mode_link, "end")
-        elif not mode and self._linear_mode:
-            self._linear_mode = False
-
     def add_node(self, node):
         """Add a new Node to the flowchart. This merely makes the flowchart
         aware of the Node, it will need to be linked in order to
-        take part in the calculation (unless linear mode is on).
+        take part in the calculation.
 
         Arguments
         -----------------
         node: Node
           A Node object to be added to the flowchart.
         """
+        if node.name in self.structure_dict:
+            if self.safe_mode: return
+            raise Flow_LinkError(f"{node.name} already in {self.name}")
         self.nodes[node.name] = node
+        node.set_owner(self)
         self.structure_dict[node.name] = []
-        self.istidy = False
-        if self._linear_mode:
-            self.unlink_nodes(self._linear_mode_link, "end")
-            self.link_nodes(self._linear_mode_link, node.name)
-            self.link_nodes(node.name, "end")
-            self._linear_mode_link = node.name
-
-    def add_process_node(self, name, func=None):
-        """Utility wrapper to first create a process object then add it to
-        the flowchart with the "add_node" method.
-
-        Arguments
-        -----------------
-        name: string
-          name of the node, should be unique in the flowchart. This is how
-          other nodes (i.e. decision nodes) will identify the node.
-
-        func: function
-          function object of the form: func(state) returns state. This can
-          be given on initialization to set the behavior of the node in
-          the flowchart. This function should operate on the state and
-          return the new updated state object.
-
-        :default:
-          None
-        """
-        newprocess = Process(name, func)
-        self.add_node(newprocess)
-
-    def add_decision_node(self, name, func=None):
-        """Utility wrapper to first create a decision object then add it to
-        the flowchart with the "add_node" method.
-
-        Arguments
-        -----------------
-        name: string
-          name of the node, should be unique in the flowchart. This is how
-          other nodes (i.e. decision nodes) will identify the node.
-
-        func: function
-          function object of the form: func(state) returns state. This can
-          be given on initialization to set the behavior of the node in
-          the flowchart. This function should operate on the state and
-          return the new updated state object.
-
-        :default:
-          None
-        """
-        newdecision = Decision(name, func)
-        self.add_node(newdecision)
 
     def link_nodes(self, node1, node2):
         """Link two nodes in the flowchart. node1 will be linked forward to node2.
@@ -202,9 +140,11 @@ class Chart(Node):
         node2: string
           A Node name in the flowchart which will have node1 linked to it.
         """
+        if self.nodes[node2].name in self.structure_dict[self.nodes[node1].name]:
+            if self.safe_mode: return
+            raise Flow_LinkError(f"{self.nodes[node2].name} already linked to {self.nodes[node1].name}")
         self.nodes[node1].link_forward(self.nodes[node2])
         self.structure_dict[node1].append(node2)
-        self.istidy = False
 
     def unlink_nodes(self, node1, node2):
         """Undo the operations of "link_nodes" and return to previous state.
@@ -219,7 +159,6 @@ class Chart(Node):
         """
         self.nodes[node1].unlink_forward(self.nodes[node2])
         self.structure_dict[node1].pop(self.structure_dict[node1].index(node2))
-        self.istidy = False
 
     def insert_node(self, node1, node2):
         """Insert node1 in the place of node2, and link to node2
@@ -238,7 +177,7 @@ class Chart(Node):
             self.link_nodes(reverse_node.name, node1)
         self.link_nodes(node1, node2)
 
-    def build_chart(self, nodes=[], structure={}):
+    def build_chart(self, structure, node_kwargs = {}):
         """Compact way to build a chart.
 
         Through this function a user may supply all necessary
@@ -252,30 +191,64 @@ class Chart(Node):
 
         Arguments
         -----------------
-        nodes: list
-          A list of Node objects to add to the flowchart. These will
-          be added one at a time in the order provided, thus if
-          "linear mode" is on then each one will be appended to the
-          end of the flowchart.
-
-        structure: dict
+        structure: dict or list
           A dictonary that gives the structure of the flowchart. The
           keys in the dictionary are the name strings of nodes, the
           values can be either name strings or lists of name
           strings. The key will be linked forward to the value(s).
-        """
-        for node in nodes:
-            self.add_node(node)
 
+        node_kwargs: dict
+          A dictionary of arguments to provide to nodes on creation.
+          For custom named nodes (e.g. sub-charts) will also provide
+          the class name for the node.
+        """
+        AllNodes = Node.all_subclasses() #get_subclasses(Node)
+        for inode, node in enumerate(structure):
+            if ":" in node:
+                node_name, node_type = node.split(":")
+                node = node_name
+                if not node in node_kwargs:
+                    node_kwargs[node] = {}
+                node_kwargs[node]["node_class"] = node_type
+                structure[inode] = node
+            if node in AllNodes:
+                self.add_node(AllNodes[node](**node_kwargs.get(node,{})))
+            elif isinstance(node, tuple) and node[0] in AllNodes:
+                self.add_node(AllNodes[node[0]](**node_kwargs.get(node[0],{})))
+            else:
+                if "name" not in node_kwargs[node]:
+                    node_kwargs[node]["name"] = node
+                if isinstance(node_kwargs[node]["node_class"], str):
+                    self.add_node(AllNodes[node_kwargs[node]["node_class"]](**node_kwargs.get(node,{})))
+                else:
+                    self.add_node(node_kwargs[node]["node_class"](**node_kwargs.get(node,{})))
+                
+        if "Start" not in self.structure_dict:
+            self.add_node(Start(**node_kwargs.get("Start", {})))
+        if "End" not in self.structure_dict:
+            self.add_node(End(**node_kwargs.get("End", {})))
+                
         if isinstance(structure, list):
-            for node1, node2 in zip(structure[:-1], structure[1:]):
-                self.link_nodes(node1, node2)
-            if not structure[0] == "start":
-                self.link_nodes("start", structure[0])
-            if not structure[-1] == "end":
-                self.link_nodes(structure[-1], "end")
+            for n in range(len(structure)):
+                if isinstance(structure[n],tuple):
+                    for node2 in structure[n][1]:
+                        self.link_nodes(structure[n][0], node2)
+                elif n < len(structure)-1 and isinstance(structure[n], str) and isinstance(structure[n+1],str):
+                    self.link_nodes(structure[n], structure[n+1])
+                elif n < len(structure)-1 and isinstance(structure[n], str) and isinstance(structure[n+1],tuple):
+                    self.link_nodes(structure[n], structure[n+1][0])
+            if len(self.nodes["Start"].forward) == 0:
+                if isinstance(structure[0],str):
+                    self.link_nodes("Start", structure[0])
+                else:
+                    self.link_nodes("Start", structure[0][0])
+            if len(self.nodes["End"].reverse) == 0:
+                if isinstance(structure[-1],str):
+                    self.link_nodes(structure[-1], "End")
+                else:
+                    self.link_nodes(structure[-1][0], "End")
         else:
-            for node1 in structure.keys():
+            for node1 in structure:
                 if isinstance(structure[node1], str):
                     self.link_nodes(node1, structure[node1])
                 else:
@@ -300,54 +273,7 @@ class Chart(Node):
         visual.layout()
         visual.draw(filename)
 
-    def save(self, filename):
-        """Save the flowchart to file.
-
-        Applies pickling to the core information in the flowchart and
-        saves to a given file location. Some python objects cannot be
-        pickled and so cannot be saved this way. The user may need to
-        write a specialized save function for such structures.
-
-        Arguments
-        -----------------
-        filename: string
-          path to save current flowchart to.
-        """
-        with open(filename, "wb") as flowchart_file:
-            flowchart_file.write(dumps(self.__dict__))
-
-    def load(self, filename):
-        """Loads the flowchart representation.
-
-        Reads a pickle file as created by "save" to reconstruct a
-        saved flowchart. This function should generally not be
-        accessed by the user, instead provide a filename when
-        initializing the flowchart and the loading will be handled
-        properly. In case you wish to use load directly, it returns a
-        dictionary of all the class structures/methods/variables.
-
-        Arguments
-        -----------------
-        filename: string
-          path to load flowchart from.
-        """
-        with open(filename, "rb") as flowchart_file:
-            res = loads(flowchart_file.read())
-        return res
-
-    def _tidy_ends(self):
-        for name, node in self.nodes.items():
-            if name == "end":
-                continue
-            if node.forward is None:
-                RuntimeWarning(f"{name} is undirected, linking to 'end' node")
-                self.link_nodes(name, "end")
-        self.istidy = True
-
     def _construct_chart_visual(self, visual = None):
-        if not self.istidy:
-            self._tidy_ends()
-
         if not visual:
             visual = pgv.AGraph(strict=True, directed=True, splines="line", overlap=False)
         nodes = []
@@ -366,23 +292,21 @@ class Chart(Node):
         return visual, nodes
 
     def __str__(self):
-        visual = self._construct_chart_visual()
+        visual, nodes = self._construct_chart_visual()
         return visual.string()
 
     def __iter__(self):
-        self.current_node = "start"
+        self.current_node = "Start"
         return self
 
     def __next__(self):
-        try:
-            self.current_node = self.nodes[self.current_node]["next"].name
-        except AttributeError:
-            next_node = self.nodes[self.current_node]["next"]
-            assert self.current_node in self.nodes
-            self.link_nodes(self.current_node, next_node)
-            self.current_node = next_node
-        if self.current_node == "end":
-            raise StopIteration
+        # try:
+        self.current_node = self.nodes[self.current_node].next().name
+        # except AttributeError:
+        #     next_node = next(self.nodes[self.current_node])
+        #     assert self.current_node in self.nodes
+        #     self.link_nodes(self.current_node, next_node)
+        #     self.current_node = next_node
         return self.nodes[self.current_node]
 
 
@@ -440,10 +364,10 @@ class Pipe(Node):
     """
 
     def __init__(
-            self, name, flowchart, safe_mode=True, process_mode="parallelize", cores=4, **kwargs
+            self, flowchart, safe_mode=True, process_mode="parallelize", cores=4, return_success = False, **kwargs
     ):
 
-        super().__init__(name)
+        super().__init__(**kwargs)
         self.update_flowchart(flowchart)
         self.safe_mode = safe_mode
         self.process_mode = process_mode
@@ -456,19 +380,19 @@ class Pipe(Node):
         self.benchmarks = []
         self.paths = []
 
-    def apply_chart(self, *state):
+    def apply_chart(self, state):
 
         chart = deepcopy(self.flowchart)
         logging.info(f"PIPE:{self.name}({self.process_mode}): {chart.name} ({datetime.now()})")
         if self.safe_mode:
             try:
-                res = chart(*state)
+                res = chart(state)
             except Exception as e:
                 logging.error(f"on step '{chart.current_node}' got error: {str(e)}")
                 logging.error("with full trace: %s" % traceback.format_exc())
                 res = None
         else:
-            res = chart(*state)
+            res = chart(state)
             
         if isinstance(chart, Chart):
             timing = chart.benchmarks
@@ -476,7 +400,10 @@ class Pipe(Node):
         else:
             timing = [chart.benchmark]
             path = [chart.name]
-        return res, timing, path
+        if self.return_success:
+            return (res is not None), timing, path
+        else:
+            return res, timing, path
 
     def _run(self, state):
         if self.process_mode == "parallelize":

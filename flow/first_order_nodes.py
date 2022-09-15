@@ -68,8 +68,8 @@ class End(Node):
         """
         raise AttributeError("'end' object has no method 'unlink_forward'")
 
-    def __getitem__(self, key):
-        raise StopIteration
+    def next(self):
+        raise StopIteration()
 
 
 class Process(Node):
@@ -131,19 +131,21 @@ class Decision(Node):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.visual_kwargs['shape'] = "diamond"
+        self.next_index = 0
 
-    def __call__(self, *state):
+    def __call__(self, state):
         start = time()
-        res = self._run(*state)
-        if isinstance(res,int) and res != 0:
-            self.forward[0], self.forward[res] = self.forward[res], self.forward[0]
+        res = self._run(state)
+        if isinstance(res,int) and 0 <= res < len(self.forward):
+            self.next_index = res
         elif isinstance(res, str) and res != self.forward[0].name:
-            names = list(self.forward[i].name for i in range(len(self.forward)))
-            index = names.index(res)
-            self.forward[0], self.forward[index] = self.forward[index], self.forward[0]
+            names = list(F.name for F in self.forward)
+            self.next_index = names.index(res)
         elif isinstance(res, Node) and res is not self.forward[0]:
-            names = list(self.forward[i].name for i in range(len(self.forward)))
-            index = names.index(res.name)
-            self.forward[0], self.forward[index] = self.forward[index], self.forward[0]            
+            names = list(F.name for F in self.forward)
+            self.next_index = names.index(res.name)
         self.benchmark = time() - start
         return state
+
+    def next(self):
+        return self.forward[self.next_index]

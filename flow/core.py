@@ -13,19 +13,7 @@ description:
 
 from time import time
 from inspect import signature
-
-class CallExitChart(Exception):
-    """
-    Raises a call to end the current chart object's itteration and
-    proceed immediately to whatever is next.
-    """
-    pass
-
-class CallExitFlow(Exception):
-    """
-    Raises a call to end the flowchart immediately. 
-    """
-    pass
+from .flow_exceptions import FlowExitChart, FlowExit
 
 class Node:
     """Base object for all nodes in the flowchart
@@ -60,10 +48,10 @@ class Node:
         self.visual_kwargs = {'color': "black",
                               'shape': 'plain',
                               'style': 'solid'}
-        if not func is None:
-            self.update_run(func)
+        if "action" in kwargs:
+            self.action = kwargs["action"]
 
-    def action(self, *state):
+    def action(self, state):
         """Placeholder function which defines the primary behaviour of the
         node.
 
@@ -87,6 +75,15 @@ class Node:
 
         """
         self.owner = node
+
+    @classmethod
+    def all_subclasses(cls):
+        subclasses = {}
+        for subclass in cls.__subclasses__():
+            subclasses[subclass.__name__] = subclass
+            subclasses.update(subclass.all_subclasses())
+        return subclasses
+        
     
     def link_forward(self, node):
         """Link to the next Node in the flow chart. Stores a reference to
@@ -152,11 +149,11 @@ class Node:
         self.reverse.remove(node)
 
     def exit_chart(self, msg = ""):
-        raise CallExitChart(msg)
+        raise FlowExitChart(msg)
     def exit_flow(self, msg = ""):
-        raise CallExitFlow(msg)
+        raise FlowExit(msg)
 
-    def _run(self, *state):
+    def _run(self, state):
         """Wrapper function for node specific action function.
 
         Arguments
@@ -168,25 +165,15 @@ class Node:
         """
         return self.action(state)
 
-    def __call__(self, *state):
+    def __call__(self, state):
         start = time()
-        res = self._run(*state)
+        res = self._run(state)
         self.benchmark = time() - start
         return res
 
-    def __getitem__(self, key):
-        if key in range(len(self.forward)):
-            return self.forward[key]
-        else:
-            raise StopIteration()
+    def next(self):
+        return self.forward[0]
 
     def __str__(self):
         return self.name
 
-
-class State:
-    """Dummy object to store state information
-
-    This can be used as a state object to pass information through a
-    flowchart.
-    """
